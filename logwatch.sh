@@ -6,6 +6,16 @@ echo
 
 set -e
 
+# ========================================
+# CONFIGURACIÓN PERSONALIZABLE
+# ========================================
+DETAIL_LEVEL=3                    # Nivel de detalle (0-10)
+RANGE="yesterday"                 # Rango de tiempo (yesterday, today, all)
+EXCLUDED_SERVICES="-zz-network -zz-sys"  # Servicios a excluir
+GOTIFY_URL="https://gotify.xxxxxxxxx.com"
+GOTIFY_TOKEN="Ahf_xassssasdqweasd"
+GOTIFY_PRIORITY=1
+
 # Colores para output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -53,12 +63,14 @@ detect_distro() {
 
 # Configuración preestablecida de Gotify
 setup_gotify_config() {
-    echo -e "${BLUE}=== Configuración de Gotify ===${NC}"
-    GOTIFY_URL="https://gotify.xxxxxxxxx.com"
-    GOTIFY_TOKEN="Ahf_xassssasdqweasd"
-    GOTIFY_PRIORITY=1
+    echo -e "${BLUE}=== Configuración ===${NC}"
+    echo "  📊 Nivel de detalle: $DETAIL_LEVEL"
+    echo "  📅 Rango de tiempo: $RANGE"
+    echo "  🚫 Servicios excluidos: $EXCLUDED_SERVICES"
+    echo "  🔗 Gotify URL: $GOTIFY_URL"
+    echo "  🔑 Priority: $GOTIFY_PRIORITY"
     
-    show_message "Configuración preestablecida aplicada ✓"
+    show_message "Configuración aplicada ✓"
 }
 
 # Instalar logwatch y dependencias
@@ -112,48 +124,47 @@ create_directories() {
 configure_logwatch() {
     show_message "Configurando logwatch..."
     
-    cat > /etc/logwatch/conf/logwatch.conf << 'EOF'
+    cat > /etc/logwatch/conf/logwatch.conf << EOF
 # Configuración de logwatch para Gotify
 LogDir = /var/log
 TmpDir = /var/cache/logwatch
 Output = stdout
 Format = text
 Encode = none
-Detail = 3
+Detail = $DETAIL_LEVEL
 Service = All
-Service = "-zz-network"
-Service = "-zz-sys"
-Range = Yesterday
+$(echo "$EXCLUDED_SERVICES" | tr ' ' '\n' | while read service; do echo "Service = \"$service\""; done)
+Range = $RANGE
 Archives = Yes
 MailTo = stdout
 MailFrom = logwatch@localhost
 EOF
 
-    show_message "Logwatch configurado ✓"
+    show_message "Logwatch configurado con Detail=$DETAIL_LEVEL ✓"
 }
 
 # Crear script de Gotify con JSON seguro
 create_gotify_script() {
     show_message "Creando script de Gotify con JSON corregido..."
     
-    cat > /usr/local/bin/logwatch-gotify.sh << 'EOF'
+    cat > /usr/local/bin/logwatch-gotify.sh << EOF
 #!/bin/bash
 
 # Configuración Gotify
-GOTIFY_URL="https://gotify.argustics.com"
-GOTIFY_TOKEN="Ahf_TLgApet1dct"
-GOTIFY_PRIORITY=1
+GOTIFY_URL="$GOTIFY_URL"
+GOTIFY_TOKEN="$GOTIFY_TOKEN"
+GOTIFY_PRIORITY=$GOTIFY_PRIORITY
 
 # Leer reporte
-REPORT=$(cat)
-if [[ -z "$REPORT" ]]; then
+REPORT=\$(cat)
+if [[ -z "\$REPORT" ]]; then
     echo "No hay contenido para enviar"
     exit 0
 fi
 
-HOSTNAME=$(hostname)
-DATE=$(date '+%Y-%m-%d %H:%M')
-TITLE="📊 Logwatch - $HOSTNAME ($DATE)"
+HOSTNAME=\$(hostname)
+DATE=\$(date '+%Y-%m-%d %H:%M')
+TITLE="📊 Logwatch - \$HOSTNAME (\$DATE)"
 
 # Método 1: Usar Python para JSON seguro
 if command -v python3 >/dev/null 2>&1; then
@@ -165,14 +176,14 @@ try:
     
     # Crear payload
     payload = {
-        "title": "$TITLE",
-        "message": """$REPORT""",
-        "priority": $GOTIFY_PRIORITY
+        "title": "\$TITLE",
+        "message": """\$REPORT""",
+        "priority": \$GOTIFY_PRIORITY
     }
     
-    headers = {"X-Gotify-Key": "$GOTIFY_TOKEN"}
+    headers = {"X-Gotify-Key": "\$GOTIFY_TOKEN"}
     
-    response = requests.post("$GOTIFY_URL/message", json=payload, headers=headers, timeout=30)
+    response = requests.post("\$GOTIFY_URL/message", json=payload, headers=headers, timeout=30)
     
     if response.status_code == 200:
         print("✅ Reporte enviado correctamente a Gotify")
@@ -191,23 +202,23 @@ PYTHON_SCRIPT
 else
     # Método 2: Fallback con curl y archivo temporal
     echo "🔄 Usando método alternativo..."
-    TEMP_FILE="/tmp/logwatch_$$.txt"
-    echo "$REPORT" > "$TEMP_FILE"
+    TEMP_FILE="/tmp/logwatch_\$\$.txt"
+    echo "\$REPORT" > "\$TEMP_FILE"
     
-    RESPONSE=$(curl -s -w "%{http_code}" \
-        -X POST "$GOTIFY_URL/message" \
-        -H "X-Gotify-Key: $GOTIFY_TOKEN" \
-        -F "title=$TITLE" \
-        -F "message=<$TEMP_FILE" \
-        -F "priority=$GOTIFY_PRIORITY")
+    RESPONSE=\$(curl -s -w "%{http_code}" \\
+        -X POST "\$GOTIFY_URL/message" \\
+        -H "X-Gotify-Key: \$GOTIFY_TOKEN" \\
+        -F "title=\$TITLE" \\
+        -F "message<\$TEMP_FILE" \\
+        -F "priority=\$GOTIFY_PRIORITY")
     
-    rm -f "$TEMP_FILE"
+    rm -f "\$TEMP_FILE"
     
-    HTTP_CODE=${RESPONSE: -3}
-    if [[ $HTTP_CODE -eq 200 ]]; then
+    HTTP_CODE=\${RESPONSE: -3}
+    if [[ \$HTTP_CODE -eq 200 ]]; then
         echo "✅ Reporte enviado correctamente"
     else
-        echo "❌ Error HTTP: $HTTP_CODE"
+        echo "❌ Error HTTP: \$HTTP_CODE"
         exit 1
     fi
 fi
@@ -221,18 +232,30 @@ EOF
 setup_cron() {
     show_message "Configurando tarea programada..."
     
+    # Construir comando con servicios excluidos
+    EXCLUDE_PARAMS=""
+    for service in $EXCLUDED_SERVICES; do
+        EXCLUDE_PARAMS="$EXCLUDE_PARAMS --service \"$service\""
+    done
+    
     cat > /etc/cron.daily/logwatch << EOF
 #!/bin/bash
-$LOGWATCH_PATH --output stdout | /usr/local/bin/logwatch-gotify.sh
+$LOGWATCH_PATH --output stdout --detail $DETAIL_LEVEL --range $RANGE --service all $EXCLUDE_PARAMS | /usr/local/bin/logwatch-gotify.sh
 EOF
 
     chmod +x /etc/cron.daily/logwatch
-    show_message "Cron configurado ✓"
+    show_message "Cron configurado con parámetros explícitos ✓"
 }
 
 # Crear script de prueba
 create_test_script() {
     show_message "Creando script de prueba..."
+    
+    # Construir comando de prueba con servicios excluidos
+    EXCLUDE_PARAMS=""
+    for service in $EXCLUDED_SERVICES; do
+        EXCLUDE_PARAMS="$EXCLUDE_PARAMS --service \"$service\""
+    done
     
     cat > /usr/local/bin/test-logwatch-gotify.sh << EOF
 #!/bin/bash
@@ -246,10 +269,11 @@ if [[ ! -x "$LOGWATCH_PATH" ]]; then
 fi
 
 echo "✅ Logwatch encontrado: $LOGWATCH_PATH"
+echo "📊 Configuración: Detail=$DETAIL_LEVEL, Range=today, Excluded=$EXCLUDED_SERVICES"
 
 # Generar reporte
 echo "📊 Generando reporte..."
-REPORT=\$($LOGWATCH_PATH --output stdout --range today 2>&1)
+REPORT=\$($LOGWATCH_PATH --output stdout --detail $DETAIL_LEVEL --range today --service all $EXCLUDE_PARAMS 2>&1)
 
 if [[ -n "\$REPORT" ]] && [[ "\$REPORT" != *"No such file"* ]]; then
     echo "✅ Reporte generado correctamente"
@@ -262,6 +286,9 @@ else
 ✅ Servidor: \$(hostname)
 🕒 Fecha: \$(date)
 📊 Logwatch: Instalado y configurado
+   - Nivel de detalle: $DETAIL_LEVEL
+   - Rango: $RANGE
+   - Servicios excluidos: $EXCLUDED_SERVICES
 📱 Gotify: Conectado correctamente
 
 🎯 Todo está funcionando perfectamente.
@@ -283,12 +310,18 @@ show_summary() {
     echo -e "${BLUE}Configuración:${NC}"
     echo "  ✅ Logwatch instalado en: $LOGWATCH_PATH"
     echo "  ✅ Python3 y requests instalados"
-    echo "  ✅ Gotify configurado: https://gotify.argustics.com"
-    echo "  ✅ JSON corregido: Sin errores de formato"
+    echo "  ✅ Gotify configurado: $GOTIFY_URL"
+    echo "  ✅ Nivel de detalle: $DETAIL_LEVEL"
+    echo "  ✅ Rango de tiempo: $RANGE"
+    echo "  ✅ Servicios excluidos: $EXCLUDED_SERVICES"
     echo "  ✅ Cron programado: Reporte diario automático"
     echo
-    echo -e "${BLUE}Prueba la instalación:${NC}"
+    echo -e "${BLUE}Comandos útiles:${NC}"
+    echo "  # Probar instalación:"
     echo "  sudo /usr/local/bin/test-logwatch-gotify.sh"
+    echo
+    echo "  # Ejecutar manualmente:"
+    echo "  sudo $LOGWATCH_PATH --output stdout --detail $DETAIL_LEVEL --range today --service all $(echo $EXCLUDED_SERVICES | sed 's/\([^[:space:]]*\)/--service "\1"/g') | sudo /usr/local/bin/logwatch-gotify.sh"
     echo
     echo -e "${YELLOW}¡Todo listo para funcionar!${NC}"
 }
